@@ -103,8 +103,8 @@ describe('transmuteText', () => {
     expect(outWords.length).toBe(inWords.length);
     const eligible = inWords.filter((w) => isEligible(w.replace(/[^A-Za-z'’]/g, '')));
     const changed = inWords.filter((w, i) => w !== outWords[i]);
-    expect(changed.length).toBeGreaterThanOrEqual(Math.floor(eligible.length * 0.15));
-    expect(changed.length).toBeLessThanOrEqual(Math.ceil(eligible.length * 0.75));
+    expect(changed.length).toBeGreaterThanOrEqual(Math.floor(eligible.length * 0.3));
+    expect(changed.length).toBeLessThanOrEqual(Math.ceil(eligible.length * 0.9));
   });
 
   it('never touches stopwords, digits, or punctuation', () => {
