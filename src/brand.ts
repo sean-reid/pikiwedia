@@ -14,21 +14,32 @@ const TAGLINE_STYLE =
   "font-family:'Linux Libertine','Georgia','Times New Roman',serif;" +
   'font-size:0.68em;line-height:1.2;color:inherit;display:inline-block;white-space:nowrap';
 
+// The upstream wordmark sets the first and last letters at full height with
+// the middle in small capitals, as in WIKIPEDIA.
 function smallCaps(text: string): string {
-  const first = text.charAt(0);
-  const rest = text.slice(1);
-  return `${first}<span style="font-size:0.8em">${rest.toUpperCase()}</span>`;
+  if (text.length < 3) return text.toUpperCase();
+  const first = text.charAt(0).toUpperCase();
+  const middle = text.slice(1, -1).toUpperCase();
+  const last = text.charAt(text.length - 1).toUpperCase();
+  return `${first}<span style="font-size:0.78em">${middle}</span>${last}`;
 }
 
+// Minerva brands with a bare wordmark image inside .branding-box; Vector uses
+// classed wordmark and tagline images. Both are replaced with text so the
+// skin's own rules keep sizing and placing them.
+const BRANDING_BOX_IMG_RE =
+  /(<div\b[^>]*class="[^"]*\bbranding-box\b[^"]*"[^>]*>[\s\S]{0,400}?)<img\b[^>]*wordmark[^>]*>/i;
+
 export function brandChrome(html: string): string {
-  let out = html.replace(
-    WORDMARK_IMG_RE,
-    `<span class="mw-logo-wordmark" style="${WORDMARK_STYLE}">${smallCaps(BRAND.wordmark)}</span>`,
-  );
+  const wordmark = `<span class="mw-logo-wordmark" style="${WORDMARK_STYLE}">${smallCaps(BRAND.wordmark)}</span>`;
+  let out = html.replace(WORDMARK_IMG_RE, wordmark);
   out = out.replace(
     TAGLINE_IMG_RE,
     `<span class="mw-logo-tagline" style="${TAGLINE_STYLE}">${BRAND.tagline}</span>`,
   );
+  if (!out.includes('mw-logo-wordmark')) {
+    out = out.replace(BRANDING_BOX_IMG_RE, (_m, lead: string) => lead + wordmark);
+  }
   return out;
 }
 

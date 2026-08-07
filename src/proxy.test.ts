@@ -1,7 +1,64 @@
 import { describe, expect, it } from 'vitest';
 import { addFooterCredit, brandChrome, retitleDocument } from './brand';
-import { isMobile, rewriteUrls, shouldTransmute, titleFromPath, upstreamUserAgent } from './proxy';
+import { transmuteTitle } from './engine';
+import {
+  isMobile,
+  isSearchApi,
+  rewriteUrls,
+  shouldTransmute,
+  titleFromPath,
+  transmuteSearchJson,
+  upstreamUserAgent,
+} from './proxy';
 import { BRAND } from './rewrite';
+
+const hamPins = () => transmuteTitle('Ham sandwich').pins;
+
+describe('transmuteSearchJson', () => {
+  it('transmutes display fields but never the slug used for navigation', () => {
+    const body = JSON.stringify({
+      pages: [
+        {
+          id: 1,
+          key: 'Ham_sandwich_theorem',
+          title: 'Ham sandwich theorem',
+          description: 'Common type of sandwich',
+        },
+      ],
+    });
+    const out = JSON.parse(transmuteSearchJson(body, hamPins()));
+    expect(out.pages[0].key).toBe('Ham_sandwich_theorem');
+    expect(out.pages[0].id).toBe(1);
+    expect(out.pages[0].title).toContain('handwich');
+    expect(out.pages[0].title).not.toBe('Ham sandwich theorem');
+  });
+
+  it('transmutes an opensearch payload and makes its urls relative', () => {
+    const body = JSON.stringify([
+      'ham sand',
+      ['Ham sandwich'],
+      [''],
+      ['https://en.wikipedia.org/wiki/Ham_sandwich'],
+    ]);
+    const out = JSON.parse(transmuteSearchJson(body, hamPins()));
+    expect(out[0]).toBe('ham sand');
+    expect(out[1][0]).toBe('Sam handwich');
+    expect(out[3][0]).toBe('/wiki/Ham_sandwich');
+  });
+
+  it('leaves a body that is not JSON alone', () => {
+    expect(transmuteSearchJson('not json at all', hamPins())).toBe('not json at all');
+  });
+});
+
+describe('isSearchApi', () => {
+  it('matches only the JSON api endpoints', () => {
+    expect(isSearchApi('/w/api.php', 'application/json; charset=utf-8')).toBe(true);
+    expect(isSearchApi('/w/rest.php/v1/search/title', 'application/json')).toBe(true);
+    expect(isSearchApi('/wiki/Ham_sandwich', 'text/html')).toBe(false);
+    expect(isSearchApi('/w/api.php', 'text/html')).toBe(false);
+  });
+});
 
 describe('titleFromPath', () => {
   it('reads the article title from the slug', () => {
@@ -41,25 +98,32 @@ describe('upstreamUserAgent', () => {
 });
 
 describe('rewriteUrls', () => {
-  it('keeps article links on this host and leaves assets upstream', () => {
+  it('makes article links relative and leaves asset hosts alone', () => {
     const html =
       '<a href="https://en.wikipedia.org/wiki/Cheese">c</a>' +
       '<a href="https://en.wikipedia.org/w/index.php?title=Cheese">e</a>' +
       '<img src="//upload.wikimedia.org/wikipedia/commons/a.png">' +
       '<link href="https://en.wikipedia.org/w/load.php?modules=x">';
-    const out = rewriteUrls(html, 'pikiwedia.dwainosaur.com', 'https');
-    expect(out).toContain('href="https://pikiwedia.dwainosaur.com/wiki/Cheese"');
-    expect(out).toContain('href="https://pikiwedia.dwainosaur.com/w/index.php?title=Cheese"');
+    const out = rewriteUrls(html);
+    expect(out).toContain('href="/wiki/Cheese"');
+    expect(out).toContain('href="/w/index.php?title=Cheese"');
+    expect(out).toContain('href="/w/load.php?modules=x"');
     expect(out).toContain('src="//upload.wikimedia.org/wikipedia/commons/a.png"');
   });
 
-  it('rewrites protocol-relative article links', () => {
-    const out = rewriteUrls(
-      '<a href="//en.wikipedia.org/wiki/Cheese">c</a>',
-      'localhost:8787',
-      'http',
+  it('rewrites protocol-relative and mobile-host article links', () => {
+    expect(rewriteUrls('<a href="//en.wikipedia.org/wiki/Cheese">c</a>')).toContain(
+      'href="/wiki/Cheese"',
     );
-    expect(out).toContain('href="//localhost:8787/wiki/Cheese"');
+    expect(rewriteUrls('<a href="https://en.m.wikipedia.org/wiki/Cheese">c</a>')).toContain(
+      'href="/wiki/Cheese"',
+    );
+  });
+
+  it('bakes no deployment host into the markup', () => {
+    const out = rewriteUrls('<a href="https://en.wikipedia.org/wiki/Cheese">c</a>');
+    expect(out).not.toContain('wikipedia.org');
+    expect(out).not.toContain('dwainosaur');
   });
 });
 
@@ -81,8 +145,23 @@ describe('brandChrome', () => {
     const out = brandChrome(html);
     expect(out).not.toContain('<img');
     expect(out).toContain('class="mw-logo-wordmark"');
-    expect(out).toContain('IKIWEDIA');
+    expect(out).toContain('IKIWEDI');
     expect(out).toContain(BRAND.tagline);
+  });
+
+  it('sets the first and last letters full height, as the upstream wordmark does', () => {
+    const out = brandChrome('<img class="mw-logo-wordmark" alt="Wikipedia" src="/w.svg">');
+    expect(out).toMatch(/>P<span[^>]*>IKIWEDI<\/span>A</);
+  });
+
+  it('brands the Minerva header, which has no classed wordmark', () => {
+    const html =
+      '<div class="branding-box"><a href="/wiki/Main_Page">' +
+      '<img src="/static/images/mobile/copyright/wikipedia-wordmark-en.svg" alt="Wikipedia" width="140">' +
+      '</a><div class="tagline">From Wikipedia, the free encyclopedia</div></div>';
+    const out = brandChrome(html);
+    expect(out).toContain('IKIWEDI');
+    expect(out).not.toContain('<img');
   });
 
   it('leaves the puzzle globe icon alone', () => {

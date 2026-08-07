@@ -142,6 +142,10 @@ export function transmuteBlockWords(
       }
     }
 
+    // A chain that could not be formed must not fall through to a pair swap
+    // with a vowel-initial partner; that is the case the chain existed for.
+    if (!splitOnset(wi).onset || !splitOnset(wj).onset) continue;
+
     if (pick >= 0.35 && pick < 0.5) {
       const swapped = swapChunks(wi, wj, rng() < 0.5);
       if (swapped) {

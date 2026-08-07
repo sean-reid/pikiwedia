@@ -1,5 +1,5 @@
 import { addFooterCredit, brandChrome, retitleDocument } from './brand';
-import { transmuteTitle } from './engine';
+import { transmuteText, transmuteTitle, type Pins } from './engine';
 import { rewriteHtml } from './rewrite';
 
 export const UPSTREAM = 'en.wikipedia.org';
@@ -62,24 +62,85 @@ export function titleFromPath(pathname: string): string {
   return slug.replace(/_/g, ' ');
 }
 
-// Links stay on this host so browsing never escapes the parody, while the
-// paths themselves keep the real slugs and remain resolvable upstream.
-export function rewriteUrls(html: string, host: string, scheme: string): string {
+// Article links are made relative so browsing never escapes the parody and no
+// deployment host is baked into the markup. Paths keep the real slugs and stay
+// resolvable upstream. Asset hosts are left alone so images and scripts still
+// load from Wikimedia.
+export function rewriteUrls(html: string): string {
   let out = html;
   for (const upstreamHost of UPSTREAM_HOSTS) {
-    out = out
-      .split(`https://${upstreamHost}/wiki/`)
-      .join(`${scheme}://${host}/wiki/`)
-      .split(`https://${upstreamHost}/w/`)
-      .join(`${scheme}://${host}/w/`)
-      .split(`//${upstreamHost}/wiki/`)
-      .join(`//${host}/wiki/`);
+    for (const prefix of ['/wiki/', '/w/']) {
+      out = out
+        .split(`https://${upstreamHost}${prefix}`)
+        .join(prefix)
+        .split(`http://${upstreamHost}${prefix}`)
+        .join(prefix)
+        .split(`//${upstreamHost}${prefix}`)
+        .join(prefix);
+    }
   }
   return out;
 }
 
 export function shouldTransmute(contentType: string | null): boolean {
   return !!contentType && /^text\/html/i.test(contentType);
+}
+
+export function isSearchApi(pathname: string, contentType: string | null): boolean {
+  if (!contentType || !/^application\/json/i.test(contentType)) return false;
+  return pathname.startsWith('/w/api.php') || pathname.startsWith('/w/rest.php');
+}
+
+// Display-only fields. The slug lives in "key", so navigation still resolves
+// upstream while the dropdown reads as the parody.
+const DISPLAY_KEYS = new Set([
+  'title',
+  'excerpt',
+  'description',
+  'snippet',
+  'displaytitle',
+  'matched_title',
+  'label',
+]);
+
+export function transmuteSearchJson(body: string, pins: Pins, density?: number): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return body;
+  }
+
+  const text = (value: string, seed: string): string =>
+    /\p{L}{3}/u.test(value) ? transmuteText(value, ['search', seed], pins, density) : value;
+
+  const walk = (node: unknown, key: string): unknown => {
+    if (typeof node === 'string') {
+      if (/^(https?:)?\/\//.test(node)) return rewriteUrls(node);
+      return DISPLAY_KEYS.has(key) ? text(node, key) : node;
+    }
+    if (Array.isArray(node)) return node.map((v) => walk(v, key));
+    if (node && typeof node === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(node)) out[k] = walk(v, k);
+      return out;
+    }
+    return node;
+  };
+
+  // opensearch answers with [query, titles, descriptions, urls] and no keys to
+  // go by, so its display arrays are addressed positionally.
+  if (Array.isArray(parsed) && parsed.length === 4 && Array.isArray(parsed[1])) {
+    const [query, titles, descriptions, urls] = parsed as [string, string[], string[], string[]];
+    return JSON.stringify([
+      query,
+      titles.map((t) => text(t, 'title')),
+      descriptions.map((d) => text(d, 'description')),
+      urls.map((u) => rewriteUrls(u)),
+    ]);
+  }
+
+  return JSON.stringify(walk(parsed, ''));
 }
 
 function passthroughHeaders(source: Headers): Headers {
@@ -132,6 +193,13 @@ export async function handle(request: Request, opts: HandleOptions = {}): Promis
   const headers = passthroughHeaders(upstream.headers);
   headers.set('x-pikiwedia-upstream', String(upstream.status));
 
+  if (isSearchApi(url.pathname, contentType)) {
+    const { pins } = transmuteTitle(titleFromPath(url.pathname) || 'Pikiwedia');
+    const json = transmuteSearchJson(await upstream.text(), pins, opts.density);
+    headers.set('cache-control', `public, max-age=0, s-maxage=${HTML_TTL_SECONDS}`);
+    return new Response(json, { status: upstream.status, headers });
+  }
+
   if (!shouldTransmute(contentType)) {
     return new Response(upstream.body, { status: upstream.status, headers });
   }
@@ -144,7 +212,7 @@ export async function handle(request: Request, opts: HandleOptions = {}): Promis
   html = brandChrome(html);
   html = retitleDocument(html, display);
   html = addFooterCredit(html);
-  html = rewriteUrls(html, url.host, url.protocol.replace(':', ''));
+  html = rewriteUrls(html);
 
   headers.set('content-type', 'text/html; charset=utf-8');
   headers.set('cache-control', `public, max-age=0, s-maxage=${HTML_TTL_SECONDS}`);

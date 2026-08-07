@@ -2,7 +2,12 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: 'e2e',
-  retries: process.env.CI ? 2 : 0,
+  retries: process.env.CI ? 2 : 1,
+  // Every test drives a real request to Wikipedia, so the suite runs one at a
+  // time; concurrent runs make the upstream throttle and the run flake.
+  workers: 1,
+  fullyParallel: false,
+  timeout: 60_000,
   use: {
     baseURL: 'http://127.0.0.1:8787',
     screenshot: 'on',
