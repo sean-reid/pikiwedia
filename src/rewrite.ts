@@ -26,7 +26,7 @@ const SKIP_CLASS_RE =
   /\b(reference|references|reflist|refbegin|citation|mw-references|mw-reference-text|IPA|ipa|mw-editsection|mw-jump-link|navbox|catlinks|printfooter|mw-indicators|licence|license|footer-info|footer-places|mw-editform)\b/;
 
 const SKIP_ID_RE =
-  /^(References|Bibliography|Further_reading|External_links|Notes|Sources|Citations|footer-info-copyright|siteSub)$/;
+  /^(References|Bibliography|Further_reading|External_links|Notes|Sources|Citations|footer-info-copyright)$/;
 
 const TEXT_ATTRS = ['title', 'alt', 'aria-label', 'placeholder'];
 const TEXT_ATTR_TAGS = new Set(['a', 'img', 'abbr', 'span', 'div', 'input', 'button', 'li']);
