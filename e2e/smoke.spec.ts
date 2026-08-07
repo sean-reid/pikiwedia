@@ -66,6 +66,21 @@ test('the same article transmutes identically on a second fetch', async ({ reque
   expect(second).toBe(first);
 });
 
+test('clicking a search suggestion lands on the article it names', async ({ request }) => {
+  const suggestions = await (
+    await request.get('/w/rest.php/v1/search/title?q=grape%20juice&limit=3')
+  ).json();
+  const first = suggestions.pages[0];
+  expect(first.key).toBeTruthy();
+
+  const click = await request.get(
+    `/w/index.php?title=Special%3ASearch&search=${encodeURIComponent(first.title)}&wprov=acrw1_0`,
+    { maxRedirects: 0 },
+  );
+  expect(click.status()).toBe(302);
+  expect(click.headers()['location']).toContain(`/wiki/${first.key}`);
+});
+
 test("Wikipedia's own stylesheets load, so the page looks like Wikipedia", async ({ page }) => {
   await page.goto('/wiki/Ham_sandwich');
   await page.waitForLoadState('networkidle');
