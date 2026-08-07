@@ -1,0 +1,7 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pikiwedia",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "routes": [{ "pattern": "pikiwedia.dwainosaur.com", "custom_domain": true }],
+}
