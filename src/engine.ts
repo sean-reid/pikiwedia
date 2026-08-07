@@ -9,8 +9,8 @@ export interface Pins {
 
 // Probability an eligible word starts an op. Pair and chain ops consume two
 // or three words each, so the resulting share of transformed words runs well
-// above this; DEFAULT_DENSITY is calibrated to land near the reference 65%.
-export const DEFAULT_DENSITY = 0.68;
+// above this.
+export const DEFAULT_DENSITY = 0.78;
 const MAX_PARTNER_DISTANCE = 3;
 const BOUNDARY_RE = /[.!?;:()[\]{}"«»=|]/;
 

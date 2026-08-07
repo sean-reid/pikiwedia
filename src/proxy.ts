@@ -103,13 +103,22 @@ const DISPLAY_KEYS = new Set([
   'label',
 ]);
 
-export function transmuteSearchJson(body: string, pins: Pins, density?: number): string {
+export interface SearchRewrite {
+  body: string;
+  // transmuted display title -> real slug, so a typeahead click can be
+  // routed back to the article the display name stands for.
+  pairs: Array<{ display: string; slug: string }>;
+}
+
+export function transmuteSearchJson(body: string, pins: Pins, density?: number): SearchRewrite {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
   } catch {
-    return body;
+    return { body, pairs: [] };
   }
+
+  const pairs: Array<{ display: string; slug: string }> = [];
 
   const text = (value: string, seed: string): string =>
     /\p{L}{3}/u.test(value) ? transmuteText(value, ['search', seed], pins, density) : value;
@@ -123,6 +132,10 @@ export function transmuteSearchJson(body: string, pins: Pins, density?: number):
     if (node && typeof node === 'object') {
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(node)) out[k] = walk(v, k);
+      const rec = out as { key?: unknown; title?: unknown };
+      if (typeof rec.key === 'string' && typeof rec.title === 'string' && rec.key) {
+        pairs.push({ display: rec.title, slug: rec.key });
+      }
       return out;
     }
     return node;
@@ -132,15 +145,65 @@ export function transmuteSearchJson(body: string, pins: Pins, density?: number):
   // go by, so its display arrays are addressed positionally.
   if (Array.isArray(parsed) && parsed.length === 4 && Array.isArray(parsed[1])) {
     const [query, titles, descriptions, urls] = parsed as [string, string[], string[], string[]];
-    return JSON.stringify([
-      query,
-      titles.map((t) => text(t, 'title')),
-      descriptions.map((d) => text(d, 'description')),
-      urls.map((u) => rewriteUrls(u)),
-    ]);
+    const outTitles = titles.map((t) => text(t, 'title'));
+    const outUrls = urls.map((u) => rewriteUrls(u));
+    outTitles.forEach((t, i) => {
+      const slug = /^\/wiki\/(.+)$/.exec(outUrls[i] ?? '')?.[1];
+      if (slug) pairs.push({ display: t, slug });
+    });
+    return {
+      body: JSON.stringify([
+        query,
+        outTitles,
+        descriptions.map((d) => text(d, 'description')),
+        outUrls,
+      ]),
+      pairs,
+    };
   }
 
-  return JSON.stringify(walk(parsed, ''));
+  return { body: JSON.stringify(walk(parsed, '')), pairs };
+}
+
+const SEARCH_MAP_ORIGIN = 'https://searchmap.pikiwedia.invalid/';
+
+function searchMapKey(display: string): Request {
+  return new Request(SEARCH_MAP_ORIGIN + encodeURIComponent(display.trim().toLowerCase()));
+}
+
+async function rememberSearchPairs(pairs: Array<{ display: string; slug: string }>): Promise<void> {
+  if (typeof caches === 'undefined') return;
+  const cache = await caches.open('searchmap');
+  await Promise.all(
+    pairs.map(({ display, slug }) =>
+      cache.put(
+        searchMapKey(display),
+        new Response(slug, { headers: { 'cache-control': `max-age=${HTML_TTL_SECONDS}` } }),
+      ),
+    ),
+  );
+}
+
+async function lookupSearchPair(display: string): Promise<string | null> {
+  if (typeof caches === 'undefined') return null;
+  const cache = await caches.open('searchmap');
+  const hit = await cache.match(searchMapKey(display));
+  return hit ? hit.text() : null;
+}
+
+// The typeahead links each suggestion to Special:Search with the DISPLAY
+// title as the query, marked wprov=acrw1_N. The display is our transmuted
+// text, which the upstream search cannot resolve, so the click is answered
+// from the remembered display-to-slug map instead.
+export function typeaheadClick(url: URL): { display: string; fragment: string } | null {
+  if (url.pathname !== '/w/index.php') return null;
+  if (url.searchParams.get('title') !== 'Special:Search') return null;
+  if (!(url.searchParams.get('wprov') ?? '').startsWith('acrw')) return null;
+  const q = url.searchParams.get('search') ?? '';
+  if (!q) return null;
+  const hash = q.indexOf('#');
+  if (hash === -1) return { display: q, fragment: '' };
+  return { display: q.slice(0, hash), fragment: q.slice(hash + 1) };
 }
 
 function passthroughHeaders(source: Headers): Headers {
@@ -172,6 +235,15 @@ export async function handle(request: Request, opts: HandleOptions = {}): Promis
     return Response.redirect(`${url.origin}/wiki/Main_Page`, 302);
   }
 
+  const click = typeaheadClick(url);
+  if (click) {
+    const slug = await lookupSearchPair(click.display);
+    if (slug) {
+      const fragment = click.fragment ? '#' + click.fragment.replace(/ /g, '_') : '';
+      return Response.redirect(`${url.origin}/wiki/${slug}${fragment}`, 302);
+    }
+  }
+
   const mobile = isMobile(request.headers.get('user-agent') ?? '');
   const upstreamUrl = new URL(url.pathname + url.search, `https://${UPSTREAM}`);
 
@@ -195,9 +267,10 @@ export async function handle(request: Request, opts: HandleOptions = {}): Promis
 
   if (isSearchApi(url.pathname, contentType)) {
     const { pins } = transmuteTitle(titleFromPath(url.pathname) || 'Pikiwedia');
-    const json = transmuteSearchJson(await upstream.text(), pins, opts.density);
+    const { body, pairs } = transmuteSearchJson(await upstream.text(), pins, opts.density);
+    await rememberSearchPairs(pairs);
     headers.set('cache-control', `public, max-age=0, s-maxage=${HTML_TTL_SECONDS}`);
-    return new Response(json, { status: upstream.status, headers });
+    return new Response(body, { status: upstream.status, headers });
   }
 
   if (!shouldTransmute(contentType)) {

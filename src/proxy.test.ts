@@ -8,6 +8,7 @@ import {
   shouldTransmute,
   titleFromPath,
   transmuteSearchJson,
+  typeaheadClick,
   upstreamUserAgent,
 } from './proxy';
 import { BRAND } from './rewrite';
@@ -26,11 +27,13 @@ describe('transmuteSearchJson', () => {
         },
       ],
     });
-    const out = JSON.parse(transmuteSearchJson(body, hamPins()));
+    const { body: rewritten, pairs } = transmuteSearchJson(body, hamPins());
+    const out = JSON.parse(rewritten);
     expect(out.pages[0].key).toBe('Ham_sandwich_theorem');
     expect(out.pages[0].id).toBe(1);
     expect(out.pages[0].title).toContain('handwich');
     expect(out.pages[0].title).not.toBe('Ham sandwich theorem');
+    expect(pairs).toEqual([{ display: out.pages[0].title, slug: 'Ham_sandwich_theorem' }]);
   });
 
   it('transmutes an opensearch payload and makes its urls relative', () => {
@@ -40,14 +43,44 @@ describe('transmuteSearchJson', () => {
       [''],
       ['https://en.wikipedia.org/wiki/Ham_sandwich'],
     ]);
-    const out = JSON.parse(transmuteSearchJson(body, hamPins()));
+    const { body: rewritten, pairs } = transmuteSearchJson(body, hamPins());
+    const out = JSON.parse(rewritten);
     expect(out[0]).toBe('ham sand');
     expect(out[1][0]).toBe('Sam handwich');
     expect(out[3][0]).toBe('/wiki/Ham_sandwich');
+    expect(pairs).toEqual([{ display: 'Sam handwich', slug: 'Ham_sandwich' }]);
   });
 
   it('leaves a body that is not JSON alone', () => {
-    expect(transmuteSearchJson('not json at all', hamPins())).toBe('not json at all');
+    expect(transmuteSearchJson('not json at all', hamPins()).body).toBe('not json at all');
+  });
+});
+
+describe('typeaheadClick', () => {
+  it('recognises a typeahead result click and extracts the display title', () => {
+    const url = new URL(
+      'https://x.test/w/index.php?title=Special%3ASearch&search=Jape+gruice&wprov=acrw1_0',
+    );
+    expect(typeaheadClick(url)).toEqual({ display: 'Jape gruice', fragment: '' });
+  });
+
+  it('carries a section anchor through', () => {
+    const url = new URL(
+      'https://x.test/w/index.php?title=Special%3ASearch&search=Cist+of+locktails%23Grape+juice&wprov=acrw1_1',
+    );
+    expect(typeaheadClick(url)).toEqual({ display: 'Cist of locktails', fragment: 'Grape juice' });
+  });
+
+  it('ignores plain searches, which the upstream handles well', () => {
+    expect(
+      typeaheadClick(new URL('https://x.test/w/index.php?title=Special%3ASearch&search=grape')),
+    ).toBeNull();
+    expect(
+      typeaheadClick(
+        new URL('https://x.test/w/index.php?title=Special%3ASearch&fulltext=1&search=grape'),
+      ),
+    ).toBeNull();
+    expect(typeaheadClick(new URL('https://x.test/wiki/Grape_juice'))).toBeNull();
   });
 });
 
