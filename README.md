@@ -8,10 +8,13 @@ Live at [pikiwedia.dwainosaur.com](https://pikiwedia.dwainosaur.com).
 
 ```sh
 npm install
+npx playwright install chromium webkit
 npm run dev        # wrangler dev on localhost
-npm test           # engine and rewriter unit tests
-npm run test:e2e   # Playwright against wrangler dev
+npm test           # engine, rewriter, and proxy unit tests
+npm run test:e2e   # browser tests at phone, tablet, and desktop widths
 ```
+
+Browser tests run one at a time because each drives a real request to Wikipedia.
 
 ## Deploy
 
