@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyPins, transmuteText, transmuteTitle } from './engine';
-import { matchCase, splitChunk, splitOnset, swapWithin } from './onset';
+import { isSpeakable, matchCase, splitChunk, splitOnset, swapWithin } from './onset';
 import { isEligible } from './words';
 
 const HAM_LEAD =
@@ -25,13 +25,26 @@ describe('splitOnset', () => {
 
 describe('splitChunk', () => {
   it('extracts onset plus vowel run, optionally with coda', () => {
-    expect(splitChunk('western', false)).toEqual({ chunk: 'we', rest: 'stern' });
     expect(splitChunk('western', true)).toEqual({ chunk: 'west', rest: 'ern' });
     expect(splitChunk('supermarkets', true)).toEqual({ chunk: 'sup', rest: 'ermarkets' });
+    expect(splitChunk('common', true)).toEqual({ chunk: 'comm', rest: 'on' });
+  });
+
+  it('refuses a remainder that does not open on a vowel', () => {
+    expect(splitChunk('western', false)).toBeNull();
+    expect(splitChunk('light', true)).toBeNull();
   });
 
   it('refuses chunks that would consume the whole word', () => {
     expect(splitChunk('free', false)).toBeNull();
+  });
+});
+
+describe('isSpeakable', () => {
+  it('rejects onsets English never uses', () => {
+    expect(isSpeakable('xettures')).toBe(false);
+    expect(isSpeakable('chegetables')).toBe(true);
+    expect(isSpeakable('slead')).toBe(true);
   });
 });
 

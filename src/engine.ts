@@ -1,4 +1,4 @@
-import { matchCase, splitChunk, splitOnset, swapWithin } from './onset';
+import { isSpeakable, matchCase, splitChunk, splitOnset, swapWithin } from './onset';
 import { rngFor, type Rng } from './prng';
 import { CURATED, CURATED_PHRASES, isEligible, WORD_RE } from './words';
 
@@ -7,7 +7,10 @@ export interface Pins {
   words: Map<string, string>;
 }
 
-const OP_PROB = 0.34;
+// Probability an eligible word starts an op. Pair and chain ops consume two
+// or three words each, so the resulting share of transformed words runs well
+// above this; DEFAULT_DENSITY is calibrated to land near the reference 65%.
+export const DEFAULT_DENSITY = 0.68;
 const MAX_PARTNER_DISTANCE = 3;
 const BOUNDARY_RE = /[.!?;:()[\]{}"«»=|]/;
 
@@ -15,12 +18,26 @@ function isBoundary(gap: string): boolean {
   return BOUNDARY_RE.test(gap) || /\d/.test(gap);
 }
 
+// Long words survive a swap as unreadable rubble rather than a joke, so they
+// take part less often.
+function legibility(word: string): number {
+  if (word.length <= 8) return 1;
+  if (word.length <= 10) return 0.7;
+  if (word.length <= 12) return 0.4;
+  return 0.15;
+}
+
+function speakablePair(x: string, y: string, a: string, b: string): [string, string] | null {
+  if (!isSpeakable(x) || !isSpeakable(y)) return null;
+  return [matchCase(x, a), matchCase(y, b)];
+}
+
 function swapOnsets(a: string, b: string): [string, string] | null {
   const sa = splitOnset(a);
   const sb = splitOnset(b);
   if (!sa.rest || !sb.rest) return null;
   if (sa.onset.toLowerCase() === sb.onset.toLowerCase()) return null;
-  return [matchCase(sb.onset + sa.rest, a), matchCase(sa.onset + sb.rest, b)];
+  return speakablePair(sb.onset + sa.rest, sa.onset + sb.rest, a, b);
 }
 
 function swapChunks(a: string, b: string, includeCoda: boolean): [string, string] | null {
@@ -28,7 +45,7 @@ function swapChunks(a: string, b: string, includeCoda: boolean): [string, string
   const cb = splitChunk(b, includeCoda);
   if (!ca || !cb) return null;
   if (ca.chunk.toLowerCase() === cb.chunk.toLowerCase()) return null;
-  return [matchCase(cb.chunk + ca.rest, a), matchCase(ca.chunk + cb.rest, b)];
+  return speakablePair(cb.chunk + ca.rest, ca.chunk + cb.rest, a, b);
 }
 
 // gaps[i] is the separator text before words[i]; gaps.length === words.length.
@@ -37,6 +54,7 @@ export function transmuteBlockWords(
   gaps: string[],
   rng: Rng,
   pins: Pins,
+  density: number = DEFAULT_DENSITY,
 ): string[] {
   const out = [...words];
   const consumed = new Array<boolean>(words.length).fill(false);
@@ -66,17 +84,19 @@ export function transmuteBlockWords(
     }
   }
 
-  const partner = (i: number): number => {
+  const partner = (i: number, needOnset: boolean): number => {
     for (let j = i + 1; j <= i + MAX_PARTNER_DISTANCE && j < words.length; j++) {
       if (isBoundary(gaps[j] ?? '')) return -1;
-      if (!consumed[j] && isEligible(words[j] ?? '')) return j;
+      if (consumed[j] || !isEligible(words[j] ?? '')) continue;
+      if (needOnset && !splitOnset(out[j] ?? '').onset) continue;
+      return j;
     }
     return -1;
   };
 
   for (let i = 0; i < words.length; i++) {
     if (consumed[i] || !isEligible(words[i] ?? '')) continue;
-    if (rng() >= OP_PROB) continue;
+    if (rng() >= density * legibility(words[i] ?? '')) continue;
     const pick = rng();
     const wi = out[i] ?? '';
 
@@ -89,7 +109,10 @@ export function transmuteBlockWords(
       continue;
     }
 
-    const j = partner(i);
+    // A vowel-initial word only reads well inside a three-way chain, where it
+    // both gives and takes; in a bare pair it strands a headless fragment.
+    const chaining = pick < 0.35;
+    const j = partner(i, !chaining && !!splitOnset(wi).onset);
     if (j === -1) {
       const swapped = swapWithin(wi);
       if (swapped && rng() < 0.5) {
@@ -100,17 +123,19 @@ export function transmuteBlockWords(
     }
     const wj = out[j] ?? '';
 
-    if (pick < 0.35) {
-      const k = partner(j);
+    if (chaining) {
+      const k = partner(j, false);
       if (k !== -1) {
         const wk = out[k] ?? '';
         const oi = splitOnset(wi);
         const oj = splitOnset(wj);
         const ok = splitOnset(wk);
-        if (oi.rest && oj.rest && ok.rest) {
-          out[i] = matchCase(oj.onset + oi.rest, wi);
-          out[j] = matchCase(ok.onset + oj.rest, wj);
-          out[k] = matchCase(oi.onset + ok.rest, wk);
+        const onsets = [oi.onset, oj.onset, ok.onset].filter(Boolean).length;
+        const rot = [oj.onset + oi.rest, ok.onset + oj.rest, oi.onset + ok.rest];
+        if (oi.rest && oj.rest && ok.rest && onsets >= 2 && rot.every(isSpeakable)) {
+          out[i] = matchCase(rot[0] ?? '', wi);
+          out[j] = matchCase(rot[1] ?? '', wj);
+          out[k] = matchCase(rot[2] ?? '', wk);
           consumed[i] = consumed[j] = consumed[k] = true;
           continue;
         }
@@ -160,11 +185,16 @@ export function assemble(t: TokenizedText, words: string[]): string {
   return s + t.tail;
 }
 
-export function transmuteText(text: string, seedParts: string[], pins: Pins): string {
+export function transmuteText(
+  text: string,
+  seedParts: string[],
+  pins: Pins,
+  density: number = DEFAULT_DENSITY,
+): string {
   const t = tokenize(text);
   if (t.words.length === 0) return text;
   const rng = rngFor(...seedParts, text);
-  return assemble(t, transmuteBlockWords(t.words, t.gaps, rng, pins));
+  return assemble(t, transmuteBlockWords(t.words, t.gaps, rng, pins, density));
 }
 
 export function emptyPins(): Pins {
@@ -194,8 +224,10 @@ export function transmuteTitle(title: string): TitleTransmutation {
     )
     .map(({ i }) => i);
 
-  const a = idx[0];
-  const b = idx[1];
+  const withOnset = idx.filter((i) => splitOnset(out[i] ?? '').onset);
+  const pair = withOnset.length >= 2 ? withOnset : idx;
+  const a = pair[0];
+  const b = pair[1];
   if (a !== undefined && b !== undefined) {
     const swapped =
       swapOnsets(out[a] ?? '', out[b] ?? '') ?? swapChunks(out[a] ?? '', out[b] ?? '', true);
@@ -209,8 +241,8 @@ export function transmuteTitle(title: string): TitleTransmutation {
   const toWords = out.map((w) => w.toLowerCase());
   if (fromWords.length > 0 && fromWords.join(' ') !== toWords.join(' ')) {
     pins.phrases.push({ from: fromWords, to: toWords });
-    const lastIdx = idx[idx.length - 1];
-    if (lastIdx !== undefined && idx.length >= 2) {
+    const lastIdx = b;
+    if (lastIdx !== undefined) {
       pins.words.set(fromWords[lastIdx] ?? '', toWords[lastIdx] ?? '');
     }
   }

@@ -18,7 +18,9 @@ export function splitOnset(word: string): { onset: string; rest: string } {
 }
 
 // chunk = onset + first vowel run, optionally plus the following consonant
-// run when at least one vowel remains after it ("west" from "western").
+// run when at least one vowel remains after it ("west" from "western"). The
+// remainder must open on a vowel, or the recipient word gains an
+// unpronounceable cluster ("pre" + "ght").
 export function splitChunk(
   word: string,
   includeCoda: boolean,
@@ -34,7 +36,14 @@ export function splitChunk(
     if (j < rest.length && j > i) end = onset.length + j;
   }
   if (end >= word.length) return null;
+  if (!isVowelAt(word, end)) return null;
   return { chunk: word.slice(0, end), rest: word.slice(end) };
+}
+
+const AWKWARD_ONSET_RE = /^(x|[bcdfghjklmnpqrstvwz]{4}|ck|kn?[bcdfgjkmpqstvwxz])/i;
+
+export function isSpeakable(word: string): boolean {
+  return !AWKWARD_ONSET_RE.test(word);
 }
 
 export function matchCase(word: string, template: string): string {
@@ -86,5 +95,7 @@ export function swapWithin(word: string): string | null {
     .slice(3)
     .map((s) => s.text)
     .join('');
-  return matchCase(newOnset + s1.text + newMid + tail, word);
+  const result = newOnset + s1.text + newMid + tail;
+  if (!isSpeakable(result)) return null;
+  return matchCase(result, word);
 }
